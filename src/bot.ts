@@ -25,22 +25,22 @@ enum MessageType {
 
 const SINGLE_MESSAGE_MAX_SIZE = 500;
 export class ChatGPTBot {
-  chatPrivateTiggerKeyword = config.chatPrivateTiggerKeyword;
-  chatTiggerRule = config.chatTiggerRule? new RegExp(config.chatTiggerRule): undefined;
+  chatPrivateTriggerKeyword = config.chatPrivateTriggerKeyword;
+  chatTriggerRule = config.chatTriggerRule? new RegExp(config.chatTriggerRule): undefined;
   disableGroupMessage = config.disableGroupMessage || false;
   botName: string = "";
   ready = false;
   setBotName(botName: string) {
     this.botName = botName;
   }
-  get chatGroupTiggerRegEx(): RegExp {
+  get chatGroupTriggerRegEx(): RegExp {
     return new RegExp(`^@${this.botName}\\s`);
   }
-  get chatPrivateTiggerRule(): RegExp | undefined {
-    const { chatPrivateTiggerKeyword, chatTiggerRule } = this;
-    let regEx = chatTiggerRule
-    if (!regEx && chatPrivateTiggerKeyword) {
-      regEx = new RegExp(chatPrivateTiggerKeyword)
+  get chatPrivateTriggerRule(): RegExp | undefined {
+    const { chatPrivateTriggerKeyword, chatTriggerRule } = this;
+    let regEx = chatTriggerRule
+    if (!regEx && chatPrivateTriggerKeyword) {
+      regEx = new RegExp(chatPrivateTriggerKeyword)
     }
     return regEx
   }
@@ -53,13 +53,13 @@ export class ChatGPTBot {
       text = item[item.length - 1];
     }
     
-    const { chatTiggerRule, chatPrivateTiggerRule } = this;
+    const { chatTriggerRule, chatPrivateTriggerRule } = this;
     
-    if (privateChat && chatPrivateTiggerRule) {
-      text = text.replace(chatPrivateTiggerRule, "")
+    if (privateChat && chatPrivateTriggerRule) {
+      text = text.replace(chatPrivateTriggerRule, "")
     } else if (!privateChat) {
-      text = text.replace(this.chatGroupTiggerRegEx, "")
-      text = chatTiggerRule? text.replace(chatTiggerRule, ""): text
+      text = text.replace(this.chatGroupTriggerRegEx, "")
+      text = chatTriggerRule? text.replace(chatTriggerRule, ""): text
     }
     // remove more text via - - - - - - - - - - - - - - -
     return text
@@ -67,12 +67,23 @@ export class ChatGPTBot {
   async getGPTMessage(text: string): Promise<string> {
     return await sendMessage(text);
   }
+  // Check if the message returned by chatgpt contains masked words]
+  checkChatGPTBlockWords(message: string): boolean {
+    if (config.chatgptBlockWords.length == 0) {
+      return false;
+    }
+    return config.chatgptBlockWords.some((word) => message.includes(word));
+  }
   // The message is segmented according to its size
   async trySay(
     talker: RoomInterface | ContactInterface,
     mesasge: string
   ): Promise<void> {
     const messages: Array<string> = [];
+    if (this.checkChatGPTBlockWords(mesasge)) {
+      console.log(`🚫 Blocked ChatGPT: ${mesasge}`);
+      return;
+    }
     let message = mesasge;
     while (message.length > SINGLE_MESSAGE_MAX_SIZE) {
       messages.push(message.slice(0, SINGLE_MESSAGE_MAX_SIZE));
@@ -84,23 +95,30 @@ export class ChatGPTBot {
     }
   }
   // Check whether the ChatGPT processing can be triggered
-  tiggerGPTMessage(text: string, privateChat: boolean = false): boolean {
-    const { chatTiggerRule } = this;
+  triggerGPTMessage(text: string, privateChat: boolean = false): boolean {
+    const { chatTriggerRule } = this;
     let triggered = false;
     if (privateChat) {
-      const regEx = this.chatPrivateTiggerRule
+      const regEx = this.chatPrivateTriggerRule
       triggered = regEx? regEx.test(text): true;
     } else {
-      triggered = this.chatGroupTiggerRegEx.test(text);
-      // group message support `chatTiggerRule`
-      if (triggered && chatTiggerRule) {
-        triggered = chatTiggerRule.test(text.replace(this.chatGroupTiggerRegEx, ""))
+      triggered = this.chatGroupTriggerRegEx.test(text);
+      // group message support `chatTriggerRule`
+      if (triggered && chatTriggerRule) {
+        triggered = chatTriggerRule.test(text.replace(this.chatGroupTriggerRegEx, ""))
       }
     }
     if (triggered) {
       console.log(`🎯 Triggered ChatGPT: ${text}`);
     }
     return triggered;
+  }
+  // Check whether the message contains the blocked words. if so, the message will be ignored. if so, return true
+  checkBlockWords(message: string): boolean {
+    if (config.blockWords.length == 0) {
+      return false;
+    }
+    return config.blockWords.some((word) => message.includes(word));
   }
   // Filter out the message that does not need to be processed
   isNonsense(
@@ -120,12 +138,13 @@ export class ChatGPTBot {
       // Transfer message
       text.includes("收到转账，请在手机上查看") ||
       // 位置消息
-      text.includes("/cgi-bin/mmwebwx-bin/webwxgetpubliclinkimg")
+      text.includes("/cgi-bin/mmwebwx-bin/webwxgetpubliclinkimg") ||
+      // 聊天屏蔽词
+      this.checkBlockWords(text)
     );
   }
 
   async onPrivateMessage(talker: ContactInterface, text: string) {
-    const talkerId = talker.id;
     const gptMessage = await this.getGPTMessage(text);
     await this.trySay(talker, gptMessage);
   }
@@ -149,7 +168,7 @@ export class ChatGPTBot {
     if (this.isNonsense(talker, messageType, rawText)) {
       return;
     }
-    if (this.tiggerGPTMessage(rawText, privateChat)) {
+    if (this.triggerGPTMessage(rawText, privateChat)) {
       const text = this.cleanMessage(rawText, privateChat);
       if (privateChat) {
         return await this.onPrivateMessage(talker, text);
